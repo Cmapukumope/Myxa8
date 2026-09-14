@@ -294,32 +294,41 @@ export function generateDemoData(nTicks: number = 200): number[][] {
   const prices: number[] = [basePrice];
 
   const totalBars = nTicks + 80;
+  
+  // Реалистичный генератор: regime switching + fat tails + autocorrelation
+  let regime = 0; // -1 = bear, 0 = chop, 1 = bull
+  let regimeStrength = 0.3;
+  let volatilityRegime = 0.5;
+  
   for (let i = 0; i < totalBars; i++) {
-    let change: number;
-    const phase = i / totalBars;
-
-    if (phase < 0.05) {
-      change = rng.randn() * 40;
-    } else if (phase < 0.20) {
-      change = 200 + rng.randn() * 50;
-    } else if (phase < 0.25) {
-      change = -40 + rng.randn() * 30;
-    } else if (phase < 0.40) {
-      change = 180 + rng.randn() * 50;
-    } else if (phase < 0.45) {
-      change = rng.randn() * 25;
-    } else if (phase < 0.60) {
-      change = -200 + rng.randn() * 50;
-    } else if (phase < 0.65) {
-      change = 60 + rng.randn() * 30;
-    } else if (phase < 0.80) {
-      change = -180 + rng.randn() * 45;
-    } else if (phase < 0.85) {
-      change = rng.randn() * 20;
-    } else {
-      change = 220 + rng.randn() * 45;
+    // Смена режима (реже, более реалистично)
+    if (rng.next() < 0.03) {
+      regime = rng.next() < 0.33 ? -1 : rng.next() < 0.5 ? 0 : 1;
+      regimeStrength = 0.2 + rng.next() * 0.6;
     }
-
+    if (rng.next() < 0.05) {
+      volatilityRegime = 0.3 + rng.next() * 0.7; // волатильность меняется
+    }
+    
+    // Базовое движение: regime drift + noise + fat tails
+    const drift = regime * regimeStrength * 30; // мягкий тренд
+    const noise = rng.randn() * 80 * volatilityRegime; // базовый шум
+    
+    // Fat tails (редкие большие движения) — t-distribution approximation
+    let fatTail = 0;
+    if (rng.next() < 0.05) {
+      fatTail = rng.randn() * 200 * volatilityRegime; // 5% шанс большого движения
+    }
+    
+    // Mean reversion (рынок не уходит бесконечно в одну сторону)
+    const deviation = (prices[prices.length - 1] - basePrice) / basePrice;
+    const meanReversion = -deviation * 15; // возврат к среднему
+    
+    // Autocorrelation (движения частично предсказуемы)
+    const prevChange = i > 0 ? (prices[prices.length - 1] - prices[prices.length - 2]) : 0;
+    const autocorr = prevChange * 0.1; // 10% автокорреляция
+    
+    const change = drift + noise + fatTail + meanReversion + autocorr;
     prices.push(Math.max(1000, prices[prices.length - 1] + change));
   }
 
@@ -328,10 +337,11 @@ export function generateDemoData(nTicks: number = 200): number[][] {
     const openP = prices[i - 1];
     const closeP = prices[i];
     const bodySize = Math.abs(closeP - openP);
-    const wickSize = bodySize * (0.15 + rng.next() * 0.4);
+    // Реалистичные тени: часто больше тела
+    const wickSize = bodySize * (0.3 + rng.next() * 1.2) + rng.next() * 20;
     const highP = Math.max(openP, closeP) + wickSize;
-    const lowP = Math.min(openP, closeP) - wickSize;
-    const volume = 1000 + rng.next() * 2000;
+    const lowP = Math.min(openP, closeP) - wickSize * (0.5 + rng.next() * 0.8);
+    const volume = 1000 + rng.next() * 5000;
     ohlcv.push([openP, highP, lowP, closeP, volume]);
   }
 
@@ -581,6 +591,8 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
   let immuneSaves = 0;
   let biophotonSaves = 0;
   let tdaLoopDetections = 0;
+  let lastExitTick = -10; // кулдаун между сделками
+  const COOLDOWN_TICKS = 3; // минимум 3 тика между сделками
 
   for (let i = 0; i < nTicks && i < ohlcvData.length; i++) {
     const bar = ohlcvData[i];
@@ -670,21 +682,21 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
       direction = 'CLOSE';
       size = 0.1;
     } else if (
-      yawLeft > yawRight && yawLeft > 0.5 && surprise < 0.06 &&
-      entryScore > 0.25 && momentumSignal >= 0 &&
-      microResult.maxPositionScale > 0.2 &&
-      darwinResult.clusterSignals[darwinResult.activeCluster] > 0
+      yawLeft > yawRight && yawLeft > 0.35 && surprise < 0.12 &&  // было 0.5 и 0.06
+      entryScore > 0.12 &&                                         // было 0.25
+      microResult.maxPositionScale > 0.15 &&                       // было 0.2
+      darwinResult.clusterSignals[darwinResult.activeCluster] > -0.3 // было > 0
     ) {
       direction = 'LONG';
-      size = Math.min(1, velocity * entryScore * 1.5) * microResult.maxPositionScale;
+      size = Math.min(1, velocity * entryScore * 1.2) * microResult.maxPositionScale;
     } else if (
-      yawRight > yawLeft && yawRight > 0.5 && surprise < 0.06 &&
-      entryScore > 0.25 && momentumSignal <= 0 &&
-      microResult.maxPositionScale > 0.2 &&
-      darwinResult.clusterSignals[darwinResult.activeCluster] < 0
+      yawRight > yawLeft && yawRight > 0.35 && surprise < 0.12 && // было 0.5 и 0.06
+      entryScore > 0.12 &&                                         // было 0.25
+      microResult.maxPositionScale > 0.15 &&                       // было 0.2
+      darwinResult.clusterSignals[darwinResult.activeCluster] < 0.3  // было < 0
     ) {
       direction = 'SHORT';
-      size = Math.min(1, velocity * entryScore * 1.5) * microResult.maxPositionScale;
+      size = Math.min(1, velocity * entryScore * 1.2) * microResult.maxPositionScale;
     } else {
       direction = 'HOLD';
       size = 0.05;
@@ -723,12 +735,18 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
   const equityCurve: number[] = [equity];
   const returns: number[] = [];
 
-  const STOP_LOSS_PCT = 0.006;
-  const TAKE_PROFIT_PCT = 0.012;
-  const TRAILING_TRIGGER = 0.004;
-  const TRAILING_STOP = 0.004;
-  const MAX_HOLD = 10;
+  // Реалистичные параметры торговли
+  const STOP_LOSS_PCT = 0.008;      // 0.8% стоп-лосс
+  const TAKE_PROFIT_PCT = 0.010;    // 1.0% тейк-профит (ближе к SL, не 2:1)
+  const TRAILING_TRIGGER = 0.005;   // 0.5% для активации трейлинга
+  const TRAILING_STOP = 0.005;      // 0.5% трейлинг-стоп
+  const MAX_HOLD = 15;              // больше тиков на удержание
   const POSITION_SIZE_PCT = 0.02;
+  
+  // Комиссии и издержки (реалистичные для крипто)
+  const TAKER_FEE = 0.0006;         // 0.06% taker fee (Binance)
+  const SLIPPAGE = 0.0003;          // 0.03% slippage
+  const ROUND_TRIP_COST = (TAKER_FEE * 2 + SLIPPAGE * 2); // ~0.18% round-trip
 
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
@@ -746,16 +764,24 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
       r.immuneSystem = immuneResult;
 
       if (r.biophoton.freezeReflex) {
-        const pnl = pnlPercent * position.size;
+        // Slippage при экстренном выходе (хуже обычного)
+        const exitSlippage = position.direction === 'LONG' 
+          ? currentPrice * (1 - SLIPPAGE * 2) 
+          : currentPrice * (1 + SLIPPAGE * 2);
+        const exitReturn = position.direction === 'LONG'
+          ? (exitSlippage - position.entryPrice) / position.entryPrice
+          : (position.entryPrice - exitSlippage) / position.entryPrice;
+        const pnl = exitReturn * position.size - position.size * TAKER_FEE; // комиссия за выход
         trades.push({
           entryTick: position.entryTick, entryPrice: position.entryPrice,
-          exitTick: i, exitPrice: currentPrice, direction: position.direction,
-          pnl, pnlPercent: pnlPercent * 100, size: position.size, holdTicks,
+          exitTick: i, exitPrice: exitSlippage, direction: position.direction,
+          pnl, pnlPercent: exitReturn * 100, size: position.size, holdTicks,
           exitReason: '🦠 Biophoton Freeze Reflex',
         });
         equity += pnl;
-        returns.push(pnlPercent);
+        returns.push(exitReturn - ROUND_TRIP_COST);
         position = null;
+        lastExitTick = i;
         biophotonSaves++;
         const microResult = microbiome.update(pnl);
         r.microbiome = microResult;
@@ -765,16 +791,24 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
       }
 
       if (immuneResult.cytokineActive) {
-        const pnl = pnlPercent * position.size;
+        // Slippage при вынужденном выходе
+        const exitSlippage = position.direction === 'LONG' 
+          ? currentPrice * (1 - SLIPPAGE * 1.5) 
+          : currentPrice * (1 + SLIPPAGE * 1.5);
+        const exitReturn = position.direction === 'LONG'
+          ? (exitSlippage - position.entryPrice) / position.entryPrice
+          : (position.entryPrice - exitSlippage) / position.entryPrice;
+        const pnl = exitReturn * position.size - position.size * TAKER_FEE;
         trades.push({
           entryTick: position.entryTick, entryPrice: position.entryPrice,
-          exitTick: i, exitPrice: currentPrice, direction: position.direction,
-          pnl, pnlPercent: pnlPercent * 100, size: position.size, holdTicks,
+          exitTick: i, exitPrice: exitSlippage, direction: position.direction,
+          pnl, pnlPercent: exitReturn * 100, size: position.size, holdTicks,
           exitReason: '🛡️ Immune System Apoptosis',
         });
         equity += pnl;
-        returns.push(pnlPercent);
+        returns.push(exitReturn - ROUND_TRIP_COST);
         position = null;
+        lastExitTick = i;
         immuneSaves++;
         const microResult = microbiome.update(pnl);
         r.microbiome = microResult;
@@ -799,17 +833,25 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
       const reversalSignal = holdTicks >= 2 && r.surprise > 0.15 && r.dopamine.ppl1 > 0.6;
 
       if (stopLossHit || takeProfitHit || maxHoldReached || reversalSignal) {
-        const pnl = pnlPercent * position.size;
+        // Slippage при выходе (обычный)
+        const exitSlippage = position.direction === 'LONG' 
+          ? currentPrice * (1 - SLIPPAGE) 
+          : currentPrice * (1 + SLIPPAGE);
+        const exitReturn = position.direction === 'LONG'
+          ? (exitSlippage - position.entryPrice) / position.entryPrice
+          : (position.entryPrice - exitSlippage) / position.entryPrice;
+        const pnl = exitReturn * position.size - position.size * TAKER_FEE;
         const reason = stopLossHit ? '🔴 Stop Loss' : takeProfitHit ? '🟢 Take Profit' :
                        maxHoldReached ? '⏰ Max Hold Time' : '🔄 Reversal Signal';
         trades.push({
           entryTick: position.entryTick, entryPrice: position.entryPrice,
-          exitTick: i, exitPrice: currentPrice, direction: position.direction,
-          pnl, pnlPercent: pnlPercent * 100, size: position.size, holdTicks, exitReason: reason,
+          exitTick: i, exitPrice: exitSlippage, direction: position.direction,
+          pnl, pnlPercent: exitReturn * 100, size: position.size, holdTicks, exitReason: reason,
         });
         equity += pnl;
-        returns.push(pnlPercent);
+        returns.push(exitReturn - ROUND_TRIP_COST);
         position = null;
+        lastExitTick = i;
         const microResult = microbiome.update(pnl);
         r.microbiome = microResult;
         const darwinResult = darwinism.update(r.surprise, 0, 0, pnl);
@@ -822,18 +864,30 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
 
     if (!position && (r.direction === 'LONG' || r.direction === 'SHORT')) {
       const microState = r.microbiome;
+      // Более реалистичные условия входа — не только "идеальные" моменты
       const canEnter =
-        r.surprise < 0.05 && r.size > 0.3 && r.freeEnergy < 0.08 &&
-        r.motor.velocity > 0.35 && microState.maxPositionScale > 0.4 &&
-        !r.biophoton.freezeReflex && r.chronobiology.resonance > 0.1 &&
-        ((r.direction === 'LONG' && r.dopamine.pam > 0.55) ||
-         (r.direction === 'SHORT' && r.dopamine.ppl1 > 0.45));
+        i - lastExitTick >= COOLDOWN_TICKS && // кулдаун между сделками
+        r.surprise < 0.12 &&           // было 0.05 — слишком строго
+        r.size > 0.15 &&               // было 0.3
+        r.freeEnergy < 0.15 &&         // было 0.08
+        r.motor.velocity > 0.2 &&      // было 0.35
+        microState.maxPositionScale > 0.2 && // было 0.4
+        !r.biophoton.freezeReflex &&
+        r.chronobiology.resonance > 0.05 && // было 0.1
+        ((r.direction === 'LONG' && r.dopamine.pam > 0.4) ||   // было 0.55
+         (r.direction === 'SHORT' && r.dopamine.ppl1 > 0.35));  // было 0.45
 
       if (canEnter) {
         const positionSize = equity * POSITION_SIZE_PCT * microState.maxPositionScale;
+        // Применяем slippage при входе (входим по худшей цене)
+        const entrySlippage = r.direction === 'LONG' 
+          ? currentPrice * (1 + SLIPPAGE) 
+          : currentPrice * (1 - SLIPPAGE);
+        // Вычитаем комиссию за вход
+        equity -= positionSize * TAKER_FEE;
         position = {
-          entryTick: i, entryPrice: currentPrice, direction: r.direction, size: positionSize,
-          stopLoss: r.direction === 'LONG' ? currentPrice * (1 - STOP_LOSS_PCT) : currentPrice * (1 + STOP_LOSS_PCT),
+          entryTick: i, entryPrice: entrySlippage, direction: r.direction, size: positionSize,
+          stopLoss: r.direction === 'LONG' ? entrySlippage * (1 - STOP_LOSS_PCT) : entrySlippage * (1 + STOP_LOSS_PCT),
           highestPnl: 0, trailingStopActive: false,
         };
       }
@@ -855,18 +909,22 @@ export function runSimulation(ohlcvData: number[][], nTicks: number): {
 
   if (position && results.length > 0) {
     const lastPrice = results[results.length - 1].price;
-    const pnlPercent = position.direction === 'LONG'
-      ? (lastPrice - position.entryPrice) / position.entryPrice
-      : (position.entryPrice - lastPrice) / position.entryPrice;
-    const pnl = pnlPercent * position.size;
+    // Slippage при закрытии в конце
+    const exitSlippage = position.direction === 'LONG' 
+      ? lastPrice * (1 - SLIPPAGE) 
+      : lastPrice * (1 + SLIPPAGE);
+    const exitReturn = position.direction === 'LONG'
+      ? (exitSlippage - position.entryPrice) / position.entryPrice
+      : (position.entryPrice - exitSlippage) / position.entryPrice;
+    const pnl = exitReturn * position.size - position.size * TAKER_FEE;
     trades.push({
       entryTick: position.entryTick, entryPrice: position.entryPrice,
-      exitTick: results.length - 1, exitPrice: lastPrice, direction: position.direction,
-      pnl, pnlPercent: pnlPercent * 100, size: position.size,
+      exitTick: results.length - 1, exitPrice: exitSlippage, direction: position.direction,
+      pnl, pnlPercent: exitReturn * 100, size: position.size,
       holdTicks: results.length - 1 - position.entryTick, exitReason: '📊 End of Simulation',
     });
     equity += pnl;
-    returns.push(pnlPercent);
+    returns.push(exitReturn - ROUND_TRIP_COST);
   }
 
   // ═══════════════════════════════════════════════════════════════
